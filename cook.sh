@@ -44,12 +44,7 @@ CONTAINER=zip
 [ "$1" ] && CONTAINER="$1"
 shift
 
-# NOTE: The max_soft_comp hand min_hard_comp here are just arbitrarily high, as
-# the timestamps are already being smoothed by oggstender such that (a) we'll
-# always do stretching/squeezing and (b) the rate of stretching/squeezing is
-# limited by the drop rate of packets
-ARESAMPLE="aresample=flags=res:min_comp=0.001:max_soft_comp=1000000:min_hard_comp=16:first_pts=0"
-FILTER="$ARESAMPLE"
+FILTER="anull"
 
 for arg in "$@"
 do
@@ -148,7 +143,6 @@ fi
 cd "$SCRIPTBASE/rec"
 
 tmpdir=`mktemp -d`
-
 [ "$tmpdir" -a -d "$tmpdir" ]
 
 echo 'rm -rf '"$tmpdir" | at 'now + 2 hours'
@@ -164,7 +158,7 @@ fi
 
 # Take a lock on the data file so that we can detect active downloads
 exec 9< "$ID.ogg.data"
-flock -n -s 9 || exit 1
+flock -n 9 || exit 1
 
 NICE="nice -n10 taskset -c 0-7 ionice -c3 chrt -i 0"
 CODECS=`timeout 10 "$SCRIPTBASE/cook/oggtracks" < $ID.ogg.header1`
@@ -271,14 +265,16 @@ do
     sno=`echo "$STREAM_NOS" | sed -n "$c"p`
     if [ "$FORMAT" = "copy" -o "$CONTAINER" = "mix" ]
     then
-        timeout $DEF_TIMEOUT cat $ID.ogg.header1 $ID.ogg.header2 $ID.ogg.data |
-            timeout $DEF_TIMEOUT $NICE "$SCRIPTBASE/cook/oggstender" $sno > "$O_FFN" &
+        timeout $DEF_TIMEOUT cat $ID.ogg.header1 $ID.ogg.header2 $ID.ogg.data \
+            $ID.ogg.header1 $ID.ogg.header2 $ID.ogg.data |
+            timeout $DEF_TIMEOUT $NICE "$SCRIPTBASE/cook/oggcorrect" $sno > "$O_FFN" &
 
     else
         CODEC=`echo "$CODECS" | sed -n "$c"p`
         [ "$CODEC" = "opus" ] && CODEC=libopus
-        timeout $DEF_TIMEOUT cat $ID.ogg.header1 $ID.ogg.header2 $ID.ogg.data |
-            timeout $DEF_TIMEOUT $NICE "$SCRIPTBASE/cook/oggstender" $sno |
+        timeout $DEF_TIMEOUT cat $ID.ogg.header1 $ID.ogg.header2 $ID.ogg.data \
+            $ID.ogg.header1 $ID.ogg.header2 $ID.ogg.data |
+            timeout $DEF_TIMEOUT $NICE "$SCRIPTBASE/cook/oggcorrect" $sno |
             timeout $DEF_TIMEOUT $NICE ffmpeg -codec $CODEC -copyts -i - \
             -af "$FILTER" \
             -flags bitexact -f wav - |
@@ -345,7 +341,7 @@ case "$CONTAINER" in
             [ "$CODEC" = "opus" ] && CODEC=libopus
 
             INPUT="$INPUT -codec $CODEC -copyts -i $i"
-            FILTER="$FILTER[$ci:a]$ARESAMPLE,dynaudnorm[aud$co];"
+            FILTER="$FILTER[$ci:a]dynaudnorm[aud$co];"
             MIXFILTER="$MIXFILTER[aud$co]"
             ci=$((ci+1))
             co=$((co+1))
@@ -386,8 +382,6 @@ esac | (cat || cat > /dev/null)
 
 # And clean up after ourselves
 cd
-echo $tmpdir
-
-#rm -rf "$tmpdir/"
+rm -rf "$tmpdir/"
 
 wait

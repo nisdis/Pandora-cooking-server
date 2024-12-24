@@ -84,7 +84,7 @@ int main(int argc, char **argv)
     unsigned char *buf = NULL;
     uint32_t bufSz = 0;
     struct OggPreHeader preHeader;
-    unsigned char outputAudacity = 0, outputHeader = 0;
+    unsigned char outputAudacity = 0, outputJSON = 0, outputHeader = 0;
     int ai;
 
     for (ai = 1; ai < argc; ai++) {
@@ -93,11 +93,16 @@ int main(int argc, char **argv)
             arg = argv[++ai];
             if (arg && !strcmp(arg, "audacity"))
                 outputAudacity = 1;
+            if (arg && !strcmp(arg, "json"))
+                outputJSON = 1;
         } else {
-            fprintf(stderr, "Use: extnotes [--format audacity|-f audacity]\n");
+            fprintf(stderr, "Use: extnotes [--format audacity|-f audacity|--format json|-f json]\n");
             exit(1);
         }
     }
+
+    if (outputJSON)
+        printf("[");
 
     while (readAll(0, &preHeader, sizeof(preHeader)) == sizeof(preHeader)) {
         struct OggHeader oggHeader;
@@ -121,9 +126,12 @@ int main(int argc, char **argv)
 
         // Get the data
         if (packetSize > bufSz) {
-            buf = realloc(buf, packetSize);
-            if (!buf)
+            unsigned char *temp = realloc(buf, packetSize); // Use a temporary pointer
+            if (!temp) { // Check if memory allocation failed
+                free(buf); // Free the existing buffer to avoid a memory leak
                 break;
+            }
+            buf = temp; // Only assign buf if realloc was successful
             bufSz = packetSize;
         }
         if (readAll(0, buf, packetSize) != packetSize)
@@ -158,6 +166,17 @@ int main(int argc, char **argv)
             printNote(buf, packetSize);
             printf("\"/>\n");
 
+        } else if (outputJSON) {
+            if (outputHeader) {
+                // Add comma before next note
+                printf(",");
+            } else {
+                outputHeader = 1;
+            }
+
+            printf("{\"time\":\"%f\",\"note\":\"", time, time);
+            printNote(buf, packetSize);
+            printf("\"}");
         } else {
             int h, m;
             if (!outputHeader) {
@@ -169,14 +188,15 @@ int main(int argc, char **argv)
             m = time / 60.0;
             time -= m * 60;
             printf("\t%d:%02d:%02d: ", h, m, (int) time);
-            printNote(buf, packetSize); 
+            printNote(buf, packetSize);
             printf("\r\n");
-
         }
     }
 
     if (outputAudacity && outputHeader)
         printf("\t</labeltrack>\n");
+    if (outputJSON)
+        printf("]");
 
     return 0;
 }
